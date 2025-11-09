@@ -13,7 +13,7 @@ class FFmpegTrimmerApp:
         self.root.title("FFmpeg Video Trimmer")
         self.root.geometry("700x600")
         self.root.resizable(False, False)
-        
+
         # Variables
         self.input_file = tk.StringVar()
         self.output_folder = tk.StringVar()
@@ -21,9 +21,32 @@ class FFmpegTrimmerApp:
         self.timecode_out = tk.StringVar(value="00:01:00")
         self.ffmpeg_path = self.get_ffmpeg_path()
         self.video_duration = None
-        
+
+        # Auto format timecode when user types
+        self.timecode_in.trace_add('write', self.on_timecode_in_change)
+        self.timecode_out.trace_add('write', self.on_timecode_out_change)
+
         # Setup GUI
         self.setup_ui()
+
+    def auto_format_timecode(self, value):
+        # Nếu value là 6 số, tự động chuyển thành hh:mm:ss
+        if re.fullmatch(r"\d{6}", value):
+            return f"{value[0:2]}:{value[2:4]}:{value[4:6]}"
+        return value
+
+    def on_timecode_in_change(self, *args):
+        value = self.timecode_in.get()
+        if re.fullmatch(r"\d{6}", value):
+            formatted = self.auto_format_timecode(value)
+            # Tránh lặp vô hạn khi set lại giá trị
+            self.timecode_in.set(formatted)
+
+    def on_timecode_out_change(self, *args):
+        value = self.timecode_out.get()
+        if re.fullmatch(r"\d{6}", value):
+            formatted = self.auto_format_timecode(value)
+            self.timecode_out.set(formatted)
         
     def get_ffmpeg_path(self):
         """Tìm ffmpeg trong thư mục gốc của chương trình"""
