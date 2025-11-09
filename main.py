@@ -5,11 +5,12 @@ import subprocess
 import threading
 from pathlib import Path
 import re
+import json
 
 class FFmpegTrimmerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Video Trimmer")
+        self.root.title("FFmpeg Video Trimmer")
         self.root.geometry("700x600")
         self.root.resizable(False, False)
         
@@ -19,6 +20,7 @@ class FFmpegTrimmerApp:
         self.timecode_in = tk.StringVar(value="00:00:00")
         self.timecode_out = tk.StringVar(value="00:01:00")
         self.ffmpeg_path = self.get_ffmpeg_path()
+        self.video_duration = None
         
         # Setup GUI
         self.setup_ui()
@@ -34,7 +36,7 @@ class FFmpegTrimmerApp:
         elif os.path.exists(ffmpeg_bin):
             return ffmpeg_bin
         else:
-            return "ffmpeg"  # Nếu không tìm thấy, cố dùng ffmpeg từ PATH
+            return "ffmpeg"
     
     def setup_ui(self):
         """Tạo giao diện người dùng"""
@@ -62,10 +64,10 @@ class FFmpegTrimmerApp:
         timecode_frame = tk.Frame(main_frame)
         timecode_frame.pack(fill=tk.X, pady=10)
         
-        tk.Label(timecode_frame, text="Time Code In: (hh:mm:ss)", font=("Arial", 10, "bold")).pack(side=tk.LEFT)
+        tk.Label(timecode_frame, text="Time Code In:", font=("Arial", 10, "bold")).pack(side=tk.LEFT)
         tk.Entry(timecode_frame, textvariable=self.timecode_in, width=15).pack(side=tk.LEFT, padx=10)
         
-        tk.Label(timecode_frame, text="Time Code Out: (hh:mm:ss)", font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=(20, 0))
+        tk.Label(timecode_frame, text="Time Code Out:", font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=(20, 0))
         tk.Entry(timecode_frame, textvariable=self.timecode_out, width=15).pack(side=tk.LEFT, padx=10)
         
         # === BUTTONS ===
@@ -95,6 +97,7 @@ class FFmpegTrimmerApp:
         )
         if file_path:
             self.input_file.set(file_path)
+            self.video_duration = None
     
     def browse_output(self):
         """Chọn folder output"""
@@ -108,6 +111,65 @@ class FFmpegTrimmerApp:
         if not re.match(pattern, timecode):
             return False
         return True
+    
+    def timecode_to_seconds(self, timecode):
+        """Chuyển đổi timecode sang giây"""
+        parts = timecode.split(':')
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        seconds = int(parts[2])
+        return hours * 3600 + minutes * 60 + seconds
+    
+    def seconds_to_timecode(self, seconds):
+        """Chuyển đổi giây sang timecode"""
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    
+    def get_video_duration(self, file_path):
+        """Lấy duration của file bằng ffprobe hoặc ffmpeg"""
+        try:
+            # Cố gắng dùng ffprobe
+            ffprobe_path = self.ffmpeg_path.replace("ffmpeg.exe", "ffprobe.exe").replace("ffmpeg", "ffprobe")
+            
+            command = [
+                ffprobe_path,
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1:noesc=1",
+                file_path
+            ]
+            
+            result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0 and result.stdout.strip():
+                try:
+                    duration = float(result.stdout.strip())
+                    return duration
+                except ValueError:
+                    pass
+        except:
+            pass
+        
+        # Nếu ffprobe không có, dùng ffmpeg để lấy duration
+        try:
+            command = [self.ffmpeg_path, "-i", file_path]
+            result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+            
+            # Tìm Duration trong output
+            output = result.stderr
+            match = re.search(r'Duration: (\d+):(\d+):(\d+\.\d+)', output)
+            if match:
+                hours = int(match.group(1))
+                minutes = int(match.group(2))
+                seconds = float(match.group(3))
+                total_seconds = hours * 3600 + minutes * 60 + seconds
+                return total_seconds
+        except:
+            pass
+        
+        return None
     
     def add_status(self, message):
         """Thêm message vào status text box"""
@@ -126,45 +188,79 @@ class FFmpegTrimmerApp:
     def trim_video(self):
         """Thực hiện cắt video"""
         self.clear_status()
-        
-        # Kiểm tra các input
+
+        # Kiểm tra các input cơ bản
         if not self.input_file.get():
             self.add_status("❌ Lỗi: Vui lòng chọn file input")
             messagebox.showerror("Lỗi", "Vui lòng chọn file input")
             return
-        
+
         if not self.output_folder.get():
             self.add_status("❌ Lỗi: Vui lòng chọn folder output")
             messagebox.showerror("Lỗi", "Vui lòng chọn folder output")
             return
-        
+
         if not os.path.exists(self.input_file.get()):
             self.add_status(f"❌ Lỗi: File input không tồn tại: {self.input_file.get()}")
             messagebox.showerror("Lỗi", "File input không tồn tại")
             return
-        
+
         if not os.path.exists(self.output_folder.get()):
             self.add_status(f"❌ Lỗi: Folder output không tồn tại: {self.output_folder.get()}")
             messagebox.showerror("Lỗi", "Folder output không tồn tại")
             return
-        
-        # Kiểm tra timecode
+
+        # Kiểm tra format timecode
         if not self.validate_timecode(self.timecode_in.get()):
             self.add_status("❌ Lỗi: Time Code In không đúng định dạng (hh:mm:ss)")
-            messagebox.showerror("Lỗi", "Time Code In phải là hh:mm:ss")
+            messagebox.showerror("Lỗi", "Time Code In phải là hh:mm:ss\nVí dụ: 00:00:30")
             return
-        
+
         if not self.validate_timecode(self.timecode_out.get()):
             self.add_status("❌ Lỗi: Time Code Out không đúng định dạng (hh:mm:ss)")
-            messagebox.showerror("Lỗi", "Time Code Out phải là hh:mm:ss")
+            messagebox.showerror("Lỗi", "Time Code Out phải là hh:mm:ss\nVí dụ: 00:01:10")
             return
-        
-        # Tạo file output
+
+        # Kiểm tra Time Code In phải nhỏ hơn Time Code Out
+        timecode_in_sec = self.timecode_to_seconds(self.timecode_in.get())
+        timecode_out_sec = self.timecode_to_seconds(self.timecode_out.get())
+
+        if timecode_in_sec >= timecode_out_sec:
+            self.add_status("❌ Lỗi: Time Code In phải nhỏ hơn Time Code Out")
+            messagebox.showerror("Lỗi", f"Time Code In ({self.timecode_in.get()}) phải nhỏ hơn Time Code Out ({self.timecode_out.get()})")
+            return
+
+        # Lấy duration của file
+        self.add_status("⏳ Đang kiểm tra độ dài file...")
+        duration = self.get_video_duration(self.input_file.get())
+
+        if duration is not None:
+            self.add_status(f"✓ Duration: {self.seconds_to_timecode(duration)}")
+
+            # Kiểm tra timecode không vượt quá duration
+            if timecode_out_sec > duration:
+                self.add_status(f"❌ Lỗi: Time Code Out ({self.timecode_out.get()}) vượt quá duration của file ({self.seconds_to_timecode(duration)})")
+                messagebox.showerror("Lỗi", f"Time Code Out ({self.timecode_out.get()}) vượt quá duration của file ({self.seconds_to_timecode(duration)})")
+                return
+
+            if timecode_in_sec > duration:
+                self.add_status(f"❌ Lỗi: Time Code In ({self.timecode_in.get()}) vượt quá duration của file ({self.seconds_to_timecode(duration)})")
+                messagebox.showerror("Lỗi", f"Time Code In ({self.timecode_in.get()}) vượt quá duration của file ({self.seconds_to_timecode(duration)})")
+                return
+        else:
+            self.add_status("⚠ Cảnh báo: Không thể lấy duration file, sẽ tiếp tục với các giá trị được nhập")
+
+        # Tạo file output, tránh trùng tên bằng cách thêm suffix nếu cần
         input_filename = os.path.basename(self.input_file.get())
         name, ext = os.path.splitext(input_filename)
-        output_filename = f"{name}_trim{ext}"
-        output_path = os.path.join(self.output_folder.get(), output_filename)
-        
+        base_output_filename = f"{name}_trim{ext}"
+        output_path = os.path.join(self.output_folder.get(), base_output_filename)
+        suffix = 1
+        while os.path.exists(output_path):
+            output_filename = f"{name}_trim_{suffix}{ext}"
+            output_path = os.path.join(self.output_folder.get(), output_filename)
+            suffix += 1
+
         # Xây dựng lệnh ffmpeg
         command = [
             self.ffmpeg_path,
@@ -174,17 +270,17 @@ class FFmpegTrimmerApp:
             "-c", "copy",
             output_path
         ]
-        
+
         # Hiển thị lệnh
         self.add_status("=" * 80)
-        self.add_status("🔧 LỆnh FFmpeg hoàn chỉnh:")
+        self.add_status("🔧 Lệnh FFmpeg hoàn chỉnh:")
         self.add_status("=" * 80)
         command_str = " ".join(command)
         self.add_status(command_str)
         self.add_status("=" * 80)
         self.add_status("")
         self.add_status("⏳ Đang xử lý... Vui lòng chờ")
-        
+
         # Chạy ffmpeg trong thread riêng để không block UI
         thread = threading.Thread(target=self.run_ffmpeg, args=(command, output_path))
         thread.start()
