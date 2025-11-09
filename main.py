@@ -6,7 +6,20 @@ import threading
 from pathlib import Path
 import re
 import json
+def get_ffmpeg_path(self):
+    """Find ffmpeg in the program folder (works for both script & frozen EXE)."""
+    if getattr(sys, 'frozen', False):
+        base_path = os.path.dirname(sys.executable)  # folder of the .exe
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
 
+    ffmpeg_exe = os.path.join(base_path, "ffmpeg.exe")
+    ffmpeg_bin = os.path.join(base_path, "ffmpeg")
+    if os.path.exists(ffmpeg_exe):
+        return ffmpeg_exe
+    elif os.path.exists(ffmpeg_bin):
+        return ffmpeg_bin
+    return "ffmpeg"
 class FFmpegTrimmerApp:
     def __init__(self, root):
         self.root = root
